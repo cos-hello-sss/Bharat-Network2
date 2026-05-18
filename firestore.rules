@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuth() { return request.auth != null; }
+
+    function isAdmin() {
+      return isAuth() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    function isNetworkOwner(networkId) {
+      return isAuth() &&
+        get(/databases/$(database)/documents/networks/$(networkId)).data.ownerId == request.auth.uid;
+    }
+
+    function isNetworkModerator(networkId) {
+      return isAuth() && (
+        request.auth.uid in get(/databases/$(database)/documents/networks/$(networkId)).data.moderators ||
+        isNetworkOwner(networkId) ||
+        isAdmin()
+      );
+    }
+
+    function isNetworkMember(networkId) {
+      return isAuth() &&
+        request.auth.uid in get(/databases/$(database)/documents/networks/$(networkId)).data.members;
+    }
+
+    match /users/{uid} {
+      allow read: if isAuth();
+      allow create: if isAuth() && request.auth.uid == uid;
+      allow update: if (
+        isAuth() && request.auth.uid == uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin'])
+      ) || isAdmin();
+    }
+
+    match /networks/{networkId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update: if isNetworkOwner(networkId) || isAdmin();
+      allow delete: if isNetworkOwner(networkId) || isAdmin();
+
+      match /chatrooms/{chatroomId} {
+        allow read: if isNetworkMember(networkId) || isAdmin();
+        allow create, delete: if isNetworkModerator(networkId);
+
+        match /messages/{messageId} {
+          allow read: if isNetworkMember(networkId) || isAdmin();
+          allow create: if isNetworkMember(networkId) && request.resource.data.uid == request.auth.uid;
+          allow delete: if isNetworkModerator(networkId);
+        }
+      }
+
+      match /meetings/{meetingId} {
+        allow read: if isNetworkMember(networkId) || isAdmin();
+        allow create: if isNetworkModerator(networkId);
+        allow update: if isNetworkMember(networkId) || isAdmin();
+        allow delete: if isNetworkModerator(networkId);
+      }
+
+      match /factchecks/{factId} {
+        allow read: if isNetworkMember(networkId) || isAdmin();
+        allow create: if isNetworkMember(networkId);
+        allow update: if isNetworkMember(networkId) || isAdmin();
+        allow delete: if isNetworkModerator(networkId);
+      }
+    }
+  }
+}
